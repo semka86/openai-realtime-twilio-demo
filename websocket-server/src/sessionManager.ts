@@ -166,12 +166,10 @@ function tryConnectModel() {
       voice: "marin"
     }
   },
-
-  ...config,
-},
-    });
+      ...config,
+    },
   });
-
+});
   session.modelConn.on("message", handleModelMessage);
   session.modelConn.on("error", closeModel);
   session.modelConn.on("close", closeModel);
