@@ -191,7 +191,7 @@ function handleModelMessage(data: RawData) {
       handleTruncation();
       break;
 
-    case "response.audio.delta":
+  case "response.output_audio.delta":
       if (session.twilioConn && session.streamSid) {
         if (session.responseStartTimestamp === undefined) {
           session.responseStartTimestamp = session.latestMediaTimestamp || 0;
