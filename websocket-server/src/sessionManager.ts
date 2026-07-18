@@ -134,23 +134,41 @@ function tryConnectModel() {
     const config = session.saved_config || {};
     jsonSend(session.modelConn, {
       type: "session.update",
-      session: {
-        modalities: ["text", "audio"],
-        turn_detection: { type: "server_vad" },
-        voice: "ash",
-        instructions: `אתה נציג טלפוני של חברת לומינור, המתמחה בניהול ואחזקת מבנים.
+  session: {
+  type: "realtime",
+  model: "gpt-realtime",
+  output_modalities: ["audio"],
 
-דבר תמיד בעברית, בקול נעים, מקצועי וטבעי.
-בתחילת השיחה אמור: "שלום, הגעתם ללומינור ניהול ואחזקת מבנים, כיצד אפשר לעזור?"
+  instructions: `אתה נציג טלפוני של חברת לומינור לניהול ואחזקת מבנים.
 
-שאל את המתקשר מה שמו, מה מספר הטלפון שלו, מה כתובת הבניין ומה נושא הפנייה.
+דבר תמיד בעברית, בצורה מקצועית, נעימה וקצרה.
+בתחילת השיחה אמור: שלום, הגעתם ללומינור ניהול ואחזקת מבנים, כיצד אפשר לעזור?
+
+שאל את המתקשר מה שמו, מספר הטלפון שלו, כתובת הבניין ונושא הפנייה.
 אל תמציא מחירים ואל תתחייב לזמן הגעה.
-בבקשת הצעת מחיר אמור שנציג אנושי יחזור אליו בהקדם.
-ענה בקצרה, בנימוס ובצורה שירותית.`,
-        input_audio_transcription: { model: "whisper-1" },
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        ...config,
+בבקשת הצעת מחיר אמור שנציג אנושי יחזור אליו בהקדם.`,
+
+  audio: {
+    input: {
+      format: {
+        type: "audio/pcmu"
+      },
+      turn_detection: {
+        type: "server_vad",
+        create_response: true,
+        interrupt_response: true
+      }
+    },
+    output: {
+      format: {
+        type: "audio/pcmu"
+      },
+      voice: "marin"
+    }
+  },
+
+  ...config,
+},
       },
     });
   });
