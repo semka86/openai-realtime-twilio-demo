@@ -125,7 +125,6 @@ function tryConnectModel() {
     {
       headers: {
         Authorization: `Bearer ${session.openAIApiKey}`,
-        "OpenAI-Beta": "realtime=v1",
       },
     }
   );
