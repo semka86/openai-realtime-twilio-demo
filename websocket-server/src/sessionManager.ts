@@ -35,12 +35,12 @@ export function handleCallConnection(
   session.twilioConn = ws;
   session.modelConn = undefined;
   session.openAIApiKey = openAIApiKey;
-  session.transcript = [];
-  session.callStartedAt = new Date().toISOString();
-  session.emailSent = false;
   session.streamSid = undefined;
   session.callSid = undefined;
   session.callerNumber = undefined;
+  session.transcript = [];
+  session.callStartedAt = new Date().toISOString();
+  session.emailSent = false;
 
   ws.on("message", handleTwilioMessage);
 
@@ -51,10 +51,12 @@ export function handleCallConnection(
 
   ws.on("close", () => {
     finishCurrentCall();
-    cleanupConnection(session.modelConn);
 
+    const modelConnection = session.modelConn;
     session.twilioConn = undefined;
     session.modelConn = undefined;
+
+    cleanupConnection(modelConnection);
     resetCallData();
 
     if (!session.frontendConn) {
@@ -70,7 +72,6 @@ export function handleFrontendConnection(ws: WebSocket) {
   ws.on("message", handleFrontendMessage);
 
   ws.on("close", () => {
-    cleanupConnection(session.frontendConn);
     session.frontendConn = undefined;
 
     if (!session.twilioConn && !session.modelConn) {
@@ -83,7 +84,7 @@ async function handleFunctionCall(item: {
   name: string;
   arguments: string;
 }) {
-  console.log("Handling function call:", item);
+  console.log("Handling function call:", item.name);
 
   const fnDef = functions.find(
     (func) => func.schema.name === item.name
@@ -106,13 +107,11 @@ async function handleFunctionCall(item: {
   }
 
   try {
-    console.log(
-      "Calling function:",
-      fnDef.schema.name,
-      args
-    );
+    const result = await fnDef.handler(args as any);
 
-    return await fnDef.handler(args as any);
+    return typeof result === "string"
+      ? result
+      : JSON.stringify(result);
   } catch (error: any) {
     console.error("Error running function:", error);
 
@@ -172,7 +171,7 @@ function handleTwilioMessage(data: RawData) {
 
       if (
         isOpen(session.modelConn) &&
-        msg.media?.payload
+        typeof msg.media?.payload === "string"
       ) {
         jsonSend(session.modelConn, {
           type: "input_audio_buffer.append",
@@ -196,12 +195,13 @@ function handleFrontendMessage(data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
 
-  if (isOpen(session.modelConn)) {
-    jsonSend(session.modelConn, msg);
-  }
-
   if (msg.type === "session.update") {
     session.saved_config = msg.session;
+    return;
+  }
+
+  if (isOpen(session.modelConn)) {
+    jsonSend(session.modelConn, msg);
   }
 }
 
@@ -218,7 +218,7 @@ function tryConnectModel() {
     return;
   }
 
-  session.modelConn = new WebSocket(
+  const modelConnection = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime",
     {
       headers: {
@@ -227,12 +227,16 @@ function tryConnectModel() {
     }
   );
 
-  session.modelConn.on("open", () => {
+  session.modelConn = modelConnection;
+
+  modelConnection.on("open", () => {
     const config = session.saved_config || {};
 
-    jsonSend(session.modelConn, {
+    jsonSend(modelConnection, {
       type: "session.update",
       session: {
+        ...config,
+
         type: "realtime",
         model: "gpt-realtime",
         output_modalities: ["audio"],
@@ -240,18 +244,25 @@ function tryConnectModel() {
         instructions: `אתה נציג טלפוני של חברת לומינור לניהול ואחזקת מבנים.
 
 דבר תמיד בעברית, בצורה מקצועית, נעימה וקצרה.
+אל תדבר מהר מדי.
+שאל שאלה אחת בכל פעם והמתן לתשובה.
 
 בתחילת השיחה אמור:
 שלום, הגעתם ללומינור ניהול ואחזקת מבנים, כיצד אפשר לעזור?
 
 במהלך השיחה אסוף בצורה טבעית:
 1. שם המתקשר.
-2. כתובת הבניין או מקום השירות.
+2. כתובת הבניין או מקום השירות: עיר, רחוב ומספר בית.
 3. נושא הפנייה.
 4. פרטים נוספים שחשוב שנציג אנושי ידע.
 
 אין צורך לבקש מהמתקשר מספר טלפון.
 מספר הטלפון מזוהה אוטומטית ממערכת השיחות.
+
+כאשר המתקשר מוסר שם, חזור על השם ושאל אם הבנת נכון.
+כאשר המתקשר מוסר כתובת, חזור בנפרד על העיר, הרחוב ומספר הבית ובקש אישור.
+אם שם, כתובת או מספר אינם ברורים, בקש מהמתקשר לחזור לאט או לאיית.
+אל תנחש שם, כתובת, מספר או פרט שלא נשמע בבירור.
 
 אל תמציא מחירים.
 אל תתחייב לזמן הגעה.
@@ -260,7 +271,7 @@ function tryConnectModel() {
 בבקשת הצעת מחיר אמור:
 תודה, רשמתי את הפרטים. נציג אנושי יחזור אליך בהקדם.
 
-לפני סיום השיחה חזור בקצרה על שם הלקוח, כתובת הבניין ונושא הפנייה, כדי לוודא שהפרטים נכונים.`,
+לפני סיום השיחה חזור בקצרה על שם הלקוח, כתובת הבניין ונושא הפנייה, ובקש אישור שהפרטים נכונים.`,
 
         audio: {
           input: {
@@ -269,25 +280,21 @@ function tryConnectModel() {
             },
 
             noise_reduction: {
-  type: "near_field",
-},
+              type: "near_field",
+            },
 
-transcription: {
-  model: "gpt-4o-transcribe",
-  language: "he",
-  prompt: `השיחה היא בעברית ישראלית.
-
-תמלל במדויק שמות של אנשים, ערים, רחובות, מספרי בתים ושמות חברות.
-מונחים נפוצים בשיחה:
-לומינור, ניהול ואחזקת מבנים, ועד בית, מצלמות אבטחה, אינטרקום,
-תקלה, הצעת מחיר, בניין, כניסה, דירה, אשקלון, שדרות, קריית גת.
-
-אל תשנה שמות וכתובות ואל תנחש מילים שלא נשמעו בבירור.`,
-},
+            transcription: {
+              model: "gpt-4o-transcribe",
+              language: "he",
+              prompt:
+                "Keywords: לומינור, ניהול ואחזקת מבנים, ועד בית, מצלמות אבטחה, אינטרקום, תקלה, הצעת מחיר, בניין, כניסה, דירה, אשקלון, שדרות, קריית גת, נחל לכיש",
             },
 
             turn_detection: {
               type: "server_vad",
+              threshold: 0.55,
+              prefix_padding_ms: 500,
+              silence_duration_ms: 900,
               create_response: true,
               interrupt_response: true,
             },
@@ -300,26 +307,28 @@ transcription: {
             voice: "marin",
           },
         },
-
-        ...config,
       },
     });
   });
-      
-      
-    handleModelMessage
-  );
 
-  session.modelConn.on("error", (error) => {
+  modelConnection.on("message", handleModelMessage);
+
+  modelConnection.on("error", (error) => {
     console.error(
       "OpenAI Realtime WebSocket error:",
       error
     );
-
-    closeModel();
   });
 
-  session.modelConn.on("close", closeModel);
+  modelConnection.on("close", () => {
+    if (session.modelConn === modelConnection) {
+      session.modelConn = undefined;
+    }
+
+    if (!session.twilioConn && !session.frontendConn) {
+      session = {};
+    }
+  });
 }
 
 function handleModelMessage(data: RawData) {
@@ -352,7 +361,6 @@ function handleModelMessage(data: RawData) {
         "Caller transcription failed:",
         JSON.stringify(event.error || event)
       );
-
       break;
     }
 
@@ -384,19 +392,18 @@ function handleModelMessage(data: RawData) {
 
     case "response.output_audio.delta": {
       if (
-        session.twilioConn &&
+        isOpen(session.twilioConn) &&
         session.streamSid &&
-        event.delta
+        typeof event.delta === "string"
       ) {
         if (
-          session.responseStartTimestamp ===
-          undefined
+          session.responseStartTimestamp === undefined
         ) {
           session.responseStartTimestamp =
             session.latestMediaTimestamp || 0;
         }
 
-        if (event.item_id) {
+        if (typeof event.item_id === "string") {
           session.lastAssistantItem =
             event.item_id;
         }
@@ -422,10 +429,17 @@ function handleModelMessage(data: RawData) {
     }
 
     case "response.output_item.done": {
-      const { item } = event;
+      const item = event.item;
 
-      if (item?.type === "function_call") {
-        handleFunctionCall(item)
+      if (
+        item?.type === "function_call" &&
+        typeof item.name === "string" &&
+        typeof item.arguments === "string"
+      ) {
+        void handleFunctionCall({
+          name: item.name,
+          arguments: item.arguments,
+        })
           .then((output) => {
             if (!isOpen(session.modelConn)) {
               return;
@@ -436,10 +450,7 @@ function handleModelMessage(data: RawData) {
               item: {
                 type: "function_call_output",
                 call_id: item.call_id,
-                output:
-                  typeof output === "string"
-                    ? output
-                    : JSON.stringify(output),
+                output,
               },
             });
 
@@ -463,7 +474,6 @@ function handleModelMessage(data: RawData) {
         "OpenAI Realtime error:",
         JSON.stringify(event)
       );
-
       break;
     }
   }
@@ -514,10 +524,6 @@ function finishCurrentCall() {
     return;
   }
 
-  /*
-   * מסמנים את השיחה המקורית כטופלה לפני סגירת
-   * החיבורים, כדי שאירוע close לא ישלח מייל נוסף.
-   */
   session.emailSent = true;
 
   const finishedSession: Session = {
@@ -525,10 +531,6 @@ function finishCurrentCall() {
     transcript: [
       ...(session.transcript || []),
     ],
-    /*
-     * העותק מקבל false כדי שפונקציית הסיום
-     * תוכל לעבד אותו פעם אחת.
-     */
     emailSent: false,
   };
 
@@ -642,7 +644,7 @@ async function createCallSummary(
           {
             role: "system",
             content:
-              "אתה מסכם שיחות שירות עבור חברת לומינור לניהול ואחזקת מבנים. כתוב בעברית ברורה ותמציתית. אין להמציא מידע שלא נאמר.",
+              "אתה מסכם שיחות שירות עבור חברת לומינור לניהול ואחזקת מבנים. כתוב בעברית ברורה ותמציתית. אין להמציא מידע שלא נאמר. כאשר יש חזרות או תיקונים בשיחה, השתמש בפרט האחרון שהמתקשר אישר.",
           },
           {
             role: "user",
@@ -658,7 +660,7 @@ async function createCallSummary(
 פעולה מומלצת לנציג:
 פרטים חסרים:
 
-כאשר פרט לא נאמר, כתוב "לא נמסר".
+כאשר פרט לא נאמר או לא אושר בבירור, כתוב "לא נמסר".
 
 תמלול השיחה:
 ${transcript}`,
@@ -782,14 +784,14 @@ async function sendLeadEmail(details: {
 
   <p>
     <strong>מספר המתקשר:</strong>
-    ${escapeHtml(callerNumber)}
+    <span dir="ltr">${escapeHtml(callerNumber)}</span>
   </p>
 
   <p>
     <strong>מזהה שיחה:</strong>
-    ${escapeHtml(
+    <span dir="ltr">${escapeHtml(
       details.callSid || "לא התקבל"
-    )}
+    )}</span>
   </p>
 
   <hr>
@@ -881,10 +883,10 @@ function handleTruncation() {
 
   const elapsedMs =
     (session.latestMediaTimestamp || 0) -
-    (session.responseStartTimestamp || 0);
+    session.responseStartTimestamp;
 
   const audioEndMs =
-    elapsedMs > 0 ? elapsedMs : 0;
+    Math.max(0, elapsedMs);
 
   if (isOpen(session.modelConn)) {
     jsonSend(session.modelConn, {
@@ -896,7 +898,7 @@ function handleTruncation() {
   }
 
   if (
-    session.twilioConn &&
+    isOpen(session.twilioConn) &&
     session.streamSid
   ) {
     jsonSend(session.twilioConn, {
@@ -908,23 +910,6 @@ function handleTruncation() {
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp =
     undefined;
-}
-
-function closeModel() {
-  if (session.modelConn) {
-    const modelConnection =
-      session.modelConn;
-
-    session.modelConn = undefined;
-    cleanupConnection(modelConnection);
-  }
-
-  if (
-    !session.twilioConn &&
-    !session.frontendConn
-  ) {
-    session = {};
-  }
 }
 
 function closeCallConnections() {
@@ -962,7 +947,7 @@ function resetCallData() {
 
 function cleanupConnection(ws?: WebSocket) {
   if (isOpen(ws)) {
-    ws.close(); 
+    ws.close();
   }
 }
 
