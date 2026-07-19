@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say>Connected</Say>
   <Connect>
-    <Stream url="{{WS_URL}}" />
+    <Stream url="{{WS_URL}}">
+      <Parameter name="from" value="{{From}}" />
+      <Parameter name="callSid" value="{{CallSid}}" />
+    </Stream>
   </Connect>
-  <Say>Disconnected</Say>
 </Response>
