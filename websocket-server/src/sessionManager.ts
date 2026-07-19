@@ -25,42 +25,37 @@ interface Session {
 
 let session: Session = {};
 
-export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
+export function handleCallConnection(
+  ws: WebSocket,
+  openAIApiKey: string
+) {
   cleanupConnection(session.twilioConn);
+  cleanupConnection(session.modelConn);
 
   session.twilioConn = ws;
+  session.modelConn = undefined;
   session.openAIApiKey = openAIApiKey;
   session.transcript = [];
   session.callStartedAt = new Date().toISOString();
   session.emailSent = false;
+  session.streamSid = undefined;
+  session.callSid = undefined;
+  session.callerNumber = undefined;
 
   ws.on("message", handleTwilioMessage);
+
   ws.on("error", (error) => {
     console.error("Twilio WebSocket error:", error);
     ws.close();
   });
 
   ws.on("close", () => {
-    const finishedSession: Session = {
-  ...session,
-  transcript: [...(session.transcript || [])],
-};
-
-    void finalizeCall(finishedSession).catch((error) => {
-      console.error("Failed to finalize call:", error);
-    });
-
+    finishCurrentCall();
     cleanupConnection(session.modelConn);
-    cleanupConnection(session.twilioConn);
 
     session.twilioConn = undefined;
     session.modelConn = undefined;
-    session.streamSid = undefined;
-    session.callSid = undefined;
-    session.callerNumber = undefined;
-    session.lastAssistantItem = undefined;
-    session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined;
+    resetCallData();
 
     if (!session.frontendConn) {
       session = {};
@@ -90,10 +85,14 @@ async function handleFunctionCall(item: {
 }) {
   console.log("Handling function call:", item);
 
-  const fnDef = functions.find((f) => f.schema.name === item.name);
+  const fnDef = functions.find(
+    (func) => func.schema.name === item.name
+  );
 
   if (!fnDef) {
-    throw new Error(`No handler found for function: ${item.name}`);
+    throw new Error(
+      `No handler found for function: ${item.name}`
+    );
   }
 
   let args: unknown;
@@ -107,14 +106,20 @@ async function handleFunctionCall(item: {
   }
 
   try {
-    console.log("Calling function:", fnDef.schema.name, args);
-    const result = await fnDef.handler(args as any);
-    return result;
-  } catch (err: any) {
-    console.error("Error running function:", err);
+    console.log(
+      "Calling function:",
+      fnDef.schema.name,
+      args
+    );
+
+    return await fnDef.handler(args as any);
+  } catch (error: any) {
+    console.error("Error running function:", error);
 
     return JSON.stringify({
-      error: `Error running function ${item.name}: ${err.message}`,
+      error: `Error running function ${item.name}: ${
+        error?.message || "Unknown error"
+      }`,
     });
   }
 }
@@ -128,16 +133,9 @@ function handleTwilioMessage(data: RawData) {
       session.streamSid = msg.start?.streamSid;
       session.callSid = msg.start?.callSid;
 
-      const customParameters = msg.start?.customParameters || {};
-console.log("CALL DEBUG:", {
-  customParameters,
-  callerNumber:
-    customParameters.from ||
-    customParameters.From ||
-    customParameters.caller ||
-    customParameters.Caller ||
-    null,
-});
+      const customParameters =
+        msg.start?.customParameters || {};
+
       session.callerNumber =
         customParameters.from ||
         customParameters.From ||
@@ -152,6 +150,11 @@ console.log("CALL DEBUG:", {
       session.callStartedAt = new Date().toISOString();
       session.emailSent = false;
 
+      console.log("CALL DEBUG:", {
+        customParameters,
+        callerNumber: session.callerNumber || null,
+      });
+
       console.log("Twilio call started:", {
         streamSid: session.streamSid,
         callSid: session.callSid,
@@ -162,22 +165,30 @@ console.log("CALL DEBUG:", {
       break;
     }
 
-    case "media":
-      session.latestMediaTimestamp = Number(msg.media?.timestamp || 0);
+    case "media": {
+      session.latestMediaTimestamp = Number(
+        msg.media?.timestamp || 0
+      );
 
-      if (isOpen(session.modelConn)) {
+      if (
+        isOpen(session.modelConn) &&
+        msg.media?.payload
+      ) {
         jsonSend(session.modelConn, {
           type: "input_audio_buffer.append",
           audio: msg.media.payload,
         });
       }
+
       break;
+    }
 
     case "stop":
-    case "close":
-      void finalizeCall(session);
-      closeAllConnections();
+    case "close": {
+      finishCurrentCall();
+      closeCallConnections();
       break;
+    }
   }
 }
 
@@ -195,7 +206,11 @@ function handleFrontendMessage(data: RawData) {
 }
 
 function tryConnectModel() {
-  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey) {
+  if (
+    !session.twilioConn ||
+    !session.streamSid ||
+    !session.openAIApiKey
+  ) {
     return;
   }
 
@@ -237,6 +252,7 @@ function tryConnectModel() {
 
 אין צורך לבקש מהמתקשר מספר טלפון.
 מספר הטלפון מזוהה אוטומטית ממערכת השיחות.
+
 אל תמציא מחירים.
 אל תתחייב לזמן הגעה.
 אל תבטיח שהעבודה תתבצע ביום או בשעה מסוימים.
@@ -244,8 +260,7 @@ function tryConnectModel() {
 בבקשת הצעת מחיר אמור:
 תודה, רשמתי את הפרטים. נציג אנושי יחזור אליך בהקדם.
 
-לפני סיום השיחה חזור בקצרה על שם הלקוח, כתובת הבניין ונושא הפנייה, כדי לוודא שהפרטים נכונים.
-`,
+לפני סיום השיחה חזור בקצרה על שם הלקוח, כתובת הבניין ונושא הפנייה, כדי לוודא שהפרטים נכונים.`,
 
         audio: {
           input: {
@@ -278,10 +293,17 @@ function tryConnectModel() {
     });
   });
 
-  session.modelConn.on("message", handleModelMessage);
+  session.modelConn.on(
+    "message",
+    handleModelMessage
+  );
 
   session.modelConn.on("error", (error) => {
-    console.error("OpenAI Realtime WebSocket error:", error);
+    console.error(
+      "OpenAI Realtime WebSocket error:",
+      error
+    );
+
     closeModel();
   });
 
@@ -292,20 +314,18 @@ function handleModelMessage(data: RawData) {
   const event = parseMessage(data);
   if (!event) return;
 
-  // console.log("OpenAI Event:", JSON.stringify(event, null, 2));
-
-  jsonSend(session.frontendConn, event);
-// console.log("OpenAI Event:", JSON.stringify(event, null, 2));
-
   jsonSend(session.frontendConn, event);
 
   switch (event.type) {
-    case "input_audio_buffer.speech_started":
+    case "input_audio_buffer.speech_started": {
       handleTruncation();
       break;
+    }
 
     case "conversation.item.input_audio_transcription.completed": {
-      const text = cleanTranscriptText(event.transcript);
+      const text = cleanTranscriptText(
+        event.transcript
+      );
 
       if (text) {
         addTranscriptEntry("caller", text);
@@ -315,19 +335,26 @@ function handleModelMessage(data: RawData) {
       break;
     }
 
-    case "conversation.item.input_audio_transcription.failed":
+    case "conversation.item.input_audio_transcription.failed": {
       console.error(
         "Caller transcription failed:",
         JSON.stringify(event.error || event)
       );
+
       break;
+    }
 
     case "response.output_audio_transcript.done": {
-      const text = cleanTranscriptText(event.transcript);
+      const text = cleanTranscriptText(
+        event.transcript
+      );
 
       if (text) {
         addTranscriptEntry("assistant", text);
-        console.log("Assistant transcript:", text);
+        console.log(
+          "Assistant transcript:",
+          text
+        );
       }
 
       break;
@@ -343,15 +370,23 @@ function handleModelMessage(data: RawData) {
       break;
     }
 
-    case "response.output_audio.delta":
-      if (session.twilioConn && session.streamSid) {
-        if (session.responseStartTimestamp === undefined) {
+    case "response.output_audio.delta": {
+      if (
+        session.twilioConn &&
+        session.streamSid &&
+        event.delta
+      ) {
+        if (
+          session.responseStartTimestamp ===
+          undefined
+        ) {
           session.responseStartTimestamp =
             session.latestMediaTimestamp || 0;
         }
 
         if (event.item_id) {
-          session.lastAssistantItem = event.item_id;
+          session.lastAssistantItem =
+            event.item_id;
         }
 
         jsonSend(session.twilioConn, {
@@ -365,9 +400,14 @@ function handleModelMessage(data: RawData) {
         jsonSend(session.twilioConn, {
           event: "mark",
           streamSid: session.streamSid,
+          mark: {
+            name: "assistant-response",
+          },
         });
       }
+
       break;
+    }
 
     case "response.output_item.done": {
       const { item } = event;
@@ -375,32 +415,45 @@ function handleModelMessage(data: RawData) {
       if (item?.type === "function_call") {
         handleFunctionCall(item)
           .then((output) => {
-            if (session.modelConn) {
-              jsonSend(session.modelConn, {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  call_id: item.call_id,
-                  output: JSON.stringify(output),
-                },
-              });
-
-              jsonSend(session.modelConn, {
-                type: "response.create",
-              });
+            if (!isOpen(session.modelConn)) {
+              return;
             }
+
+            jsonSend(session.modelConn, {
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: item.call_id,
+                output:
+                  typeof output === "string"
+                    ? output
+                    : JSON.stringify(output),
+              },
+            });
+
+            jsonSend(session.modelConn, {
+              type: "response.create",
+            });
           })
-          .catch((err) => {
-            console.error("Error handling function call:", err);
+          .catch((error) => {
+            console.error(
+              "Error handling function call:",
+              error
+            );
           });
       }
 
       break;
     }
 
-    case "error":
-      console.error("OpenAI Realtime error:", JSON.stringify(event));
+    case "error": {
+      console.error(
+        "OpenAI Realtime error:",
+        JSON.stringify(event)
+      );
+
       break;
+    }
   }
 }
 
@@ -416,7 +469,9 @@ function addTranscriptEntry(
   }
 
   const previousEntry =
-    session.transcript[session.transcript.length - 1];
+    session.transcript[
+      session.transcript.length - 1
+    ];
 
   if (
     previousEntry &&
@@ -432,7 +487,9 @@ function addTranscriptEntry(
   });
 }
 
-function cleanTranscriptText(value: unknown): string {
+function cleanTranscriptText(
+  value: unknown
+): string {
   if (typeof value !== "string") {
     return "";
   }
@@ -440,23 +497,63 @@ function cleanTranscriptText(value: unknown): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-async function finalizeCall(callSession: Session) {
+function finishCurrentCall() {
+  if (session.emailSent) {
+    return;
+  }
+
+  /*
+   * מסמנים את השיחה המקורית כטופלה לפני סגירת
+   * החיבורים, כדי שאירוע close לא ישלח מייל נוסף.
+   */
+  session.emailSent = true;
+
+  const finishedSession: Session = {
+    ...session,
+    transcript: [
+      ...(session.transcript || []),
+    ],
+    /*
+     * העותק מקבל false כדי שפונקציית הסיום
+     * תוכל לעבד אותו פעם אחת.
+     */
+    emailSent: false,
+  };
+
+  void finalizeCall(finishedSession).catch(
+    (error) => {
+      console.error(
+        "Failed to finalize call:",
+        error
+      );
+    }
+  );
+}
+
+async function finalizeCall(
+  callSession: Session
+) {
   if (callSession.emailSent) {
     return;
   }
 
   callSession.emailSent = true;
 
-  const transcript = callSession.transcript || [];
+  const transcript =
+    callSession.transcript || [];
 
   if (transcript.length === 0) {
-    console.log("No transcript collected; email will not be sent.");
+    console.log(
+      "No transcript collected; email will not be sent."
+    );
     return;
   }
 
-  const transcriptText = formatTranscript(transcript);
+  const transcriptText =
+    formatTranscript(transcript);
 
-  let summary = "לא ניתן היה ליצור סיכום אוטומטי.";
+  let summary =
+    "לא ניתן היה ליצור סיכום אוטומטי.";
 
   try {
     summary = await createCallSummary(
@@ -464,29 +561,43 @@ async function finalizeCall(callSession: Session) {
       callSession.openAIApiKey
     );
   } catch (error) {
-    console.error("Failed creating call summary:", error);
+    console.error(
+      "Failed creating call summary:",
+      error
+    );
   }
 
   try {
     await sendLeadEmail({
       summary,
       transcript: transcriptText,
-      callerNumber: callSession.callerNumber,
+      callerNumber:
+        callSession.callerNumber,
       callSid: callSession.callSid,
-      startedAt: callSession.callStartedAt,
+      startedAt:
+        callSession.callStartedAt,
     });
 
-    console.log("Lead email sent successfully.");
+    console.log(
+      "Lead email sent successfully."
+    );
   } catch (error) {
-    console.error("Failed sending lead email:", error);
+    console.error(
+      "Failed sending lead email:",
+      error
+    );
   }
 }
 
-function formatTranscript(entries: TranscriptEntry[]): string {
+function formatTranscript(
+  entries: TranscriptEntry[]
+): string {
   return entries
     .map((entry) => {
       const speaker =
-        entry.role === "caller" ? "המתקשר" : "נציג לומינור";
+        entry.role === "caller"
+          ? "המתקשר"
+          : "נציג לומינור";
 
       return `${speaker}: ${entry.text}`;
     })
@@ -498,7 +609,9 @@ async function createCallSummary(
   apiKey?: string
 ): Promise<string> {
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is missing");
+    throw new Error(
+      "OPENAI_API_KEY is missing"
+    );
   }
 
   const response = await fetch(
@@ -509,8 +622,10 @@ async function createCallSummary(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
+
       body: JSON.stringify({
         model: "gpt-5-mini",
+
         input: [
           {
             role: "system",
@@ -524,7 +639,6 @@ async function createCallSummary(
 הצג את הסיכום במבנה הבא:
 
 שם המתקשר:
-מספר טלפון:
 כתובת הבניין או מקום השירות:
 נושא הפנייה:
 פירוט הבקשה:
@@ -546,9 +660,9 @@ ${transcript}`,
 
   if (!response.ok) {
     throw new Error(
-      `OpenAI summary error ${response.status}: ${JSON.stringify(
-        body
-      )}`
+      `OpenAI summary error ${
+        response.status
+      }: ${JSON.stringify(body)}`
     );
   }
 
@@ -559,10 +673,13 @@ ${transcript}`,
     return body.output_text.trim();
   }
 
-  const extractedText = extractResponseText(body);
+  const extractedText =
+    extractResponseText(body);
 
   if (!extractedText) {
-    throw new Error("OpenAI returned no summary text");
+    throw new Error(
+      "OpenAI returned no summary text"
+    );
   }
 
   return extractedText;
@@ -576,16 +693,21 @@ function extractResponseText(body: any): string {
   }
 
   for (const outputItem of body.output) {
-    if (!Array.isArray(outputItem?.content)) {
+    if (
+      !Array.isArray(outputItem?.content)
+    ) {
       continue;
     }
 
     for (const contentItem of outputItem.content) {
       if (
-        typeof contentItem?.text === "string" &&
+        typeof contentItem?.text ===
+          "string" &&
         contentItem.text.trim()
       ) {
-        texts.push(contentItem.text.trim());
+        texts.push(
+          contentItem.text.trim()
+        );
       }
     }
   }
@@ -600,93 +722,127 @@ async function sendLeadEmail(details: {
   callSid?: string;
   startedAt?: string;
 }) {
-  const resendApiKey = process.env.RESEND_API_KEY;
-  const leadsEmail = process.env.LEADS_EMAIL;
+  const resendApiKey =
+    process.env.RESEND_API_KEY;
+
+  const leadsEmail =
+    process.env.LEADS_EMAIL;
 
   if (!resendApiKey) {
-    throw new Error("RESEND_API_KEY is missing");
+    throw new Error(
+      "RESEND_API_KEY is missing"
+    );
   }
 
   if (!leadsEmail) {
-    throw new Error("LEADS_EMAIL is missing");
+    throw new Error(
+      "LEADS_EMAIL is missing"
+    );
   }
 
   const callDate = details.startedAt
-    ? new Date(details.startedAt).toLocaleString("he-IL", {
+    ? new Date(
+        details.startedAt
+      ).toLocaleString("he-IL", {
         timeZone: "Asia/Jerusalem",
       })
     : new Date().toLocaleString("he-IL", {
         timeZone: "Asia/Jerusalem",
       });
 
-  const subjectCaller = details.callerNumber
-    ? ` - ${details.callerNumber}`
-    : "";
+  const callerNumber =
+    details.callerNumber ||
+    "לא התקבל אוטומטית";
+
+  const subjectCaller =
+    details.callerNumber
+      ? ` - ${details.callerNumber}`
+      : "";
 
   const html = `
-    <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.6;max-width:800px;margin:auto">
-      <h1 style="font-size:22px">פנייה חדשה – לומינור</h1>
+<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.6;max-width:800px;margin:auto">
+  <h1 style="font-size:22px">פנייה חדשה – לומינור</h1>
 
-      <p><strong>מועד השיחה:</strong> ${escapeHtml(callDate)}</p>
+  <p>
+    <strong>מועד השיחה:</strong>
+    ${escapeHtml(callDate)}
+  </p>
 
-      <p>
-        <strong>מספר המתקשר:</strong>
-        ${escapeHtml(details.callerNumber || "לא התקבל אוטומטית")}
-      </p>
+  <p>
+    <strong>מספר המתקשר:</strong>
+    ${escapeHtml(callerNumber)}
+  </p>
 
-      <p>
-        <strong>מזהה שיחה:</strong>
-        ${escapeHtml(details.callSid || "לא התקבל")}
-      </p>
+  <p>
+    <strong>מזהה שיחה:</strong>
+    ${escapeHtml(
+      details.callSid || "לא התקבל"
+    )}
+  </p>
 
-      <hr>
+  <hr>
 
-      <h2 style="font-size:18px">סיכום השיחה</h2>
+  <h2 style="font-size:18px">
+    סיכום השיחה
+  </h2>
 
-      <div style="white-space:pre-wrap;background:#f5f5f5;padding:15px;border-radius:8px">
+  <div style="white-space:pre-wrap;background:#f5f5f5;padding:15px;border-radius:8px">
 ${escapeHtml(details.summary)}
-      </div>
+  </div>
 
-      <h2 style="font-size:18px;margin-top:25px">תמלול מלא</h2>
+  <h2 style="font-size:18px;margin-top:25px">
+    תמלול מלא
+  </h2>
 
-      <div style="white-space:pre-wrap;background:#f5f5f5;padding:15px;border-radius:8px">
+  <div style="white-space:pre-wrap;background:#f5f5f5;padding:15px;border-radius:8px">
 ${escapeHtml(details.transcript)}
-      </div>
-    </div>
-  `;
+  </div>
+</div>`;
 
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: "Luminor <onboarding@resend.dev>",
-      to: [leadsEmail],
-      subject: `פנייה חדשה מהנציג האוטומטי${subjectCaller}`,
-      html,
-      text: `פנייה חדשה – לומינור
+  const text = `פנייה חדשה – לומינור
 
 מועד השיחה: ${callDate}
-מספר המתקשר: ${
-        details.callerNumber || "לא התקבל אוטומטית"
-      }
-מזהה שיחה: ${details.callSid || "לא התקבל"}
+מספר המתקשר: ${callerNumber}
+מזהה שיחה: ${
+    details.callSid || "לא התקבל"
+  }
 
 סיכום:
 ${details.summary}
 
 תמלול מלא:
-${details.transcript}`,
-    }),
-  });
+${details.transcript}`;
+
+  const response = await fetch(
+    "https://api.resend.com/emails",
+    {
+      method: "POST",
+
+      headers: {
+        Authorization:
+          `Bearer ${resendApiKey}`,
+        "Content-Type": "application/json",
+      },
+
+      body: JSON.stringify({
+        from:
+          "Luminor <onboarding@resend.dev>",
+        to: [leadsEmail],
+        subject:
+          `פנייה חדשה מהנציג האוטומטי${subjectCaller}`,
+        html,
+        text,
+      }),
+    }
+  );
 
   const body: any = await response.json();
 
   if (!response.ok) {
     throw new Error(
-      `Resend error ${response.status}: ${JSON.stringify(body)}`
+      `Resend error ${
+        response.status
+      }: ${JSON.stringify(body)}`
     );
   }
 
@@ -705,7 +861,8 @@ function escapeHtml(value: string): string {
 function handleTruncation() {
   if (
     !session.lastAssistantItem ||
-    session.responseStartTimestamp === undefined
+    session.responseStartTimestamp ===
+      undefined
   ) {
     return;
   }
@@ -714,7 +871,8 @@ function handleTruncation() {
     (session.latestMediaTimestamp || 0) -
     (session.responseStartTimestamp || 0);
 
-  const audioEndMs = elapsedMs > 0 ? elapsedMs : 0;
+  const audioEndMs =
+    elapsedMs > 0 ? elapsedMs : 0;
 
   if (isOpen(session.modelConn)) {
     jsonSend(session.modelConn, {
@@ -725,59 +883,76 @@ function handleTruncation() {
     });
   }
 
+  if (
+    session.twilioConn &&
+    session.streamSid
+  ) {
+    jsonSend(session.twilioConn, {
+      event: "clear",
+      streamSid: session.streamSid,
+    });
+  }
+
   session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
+  session.responseStartTimestamp =
+    undefined;
 }
 
 function closeModel() {
-  cleanupConnection(session.modelConn);
-  session.modelConn = undefined;
+  if (session.modelConn) {
+    const modelConnection =
+      session.modelConn;
 
-  if (!session.twilioConn && !session.frontendConn) {
+    session.modelConn = undefined;
+    cleanupConnection(modelConnection);
+  }
+
+  if (
+    !session.twilioConn &&
+    !session.frontendConn
+  ) {
     session = {};
   }
 }
 
-function closeAllConnections() {
-  const finishedSession: Session = {
-    ...session,
-    transcript: [...(session.transcript || [])],
-  };
+function closeCallConnections() {
+  const twilioConnection =
+    session.twilioConn;
 
-  void finalizeCall(finishedSession).catch((error) => {
-    console.error("Failed to finalize closed call:", error);
-  });
+  const modelConnection =
+    session.modelConn;
 
-  if (session.twilioConn) {
-    session.twilioConn.close();
-    session.twilioConn = undefined;
+  session.twilioConn = undefined;
+  session.modelConn = undefined;
+
+  cleanupConnection(modelConnection);
+  cleanupConnection(twilioConnection);
+
+  resetCallData();
+
+  if (!session.frontendConn) {
+    session = {};
   }
+}
 
-  if (session.modelConn) {
-    session.modelConn.close();
-    session.modelConn = undefined;
-  }
-
-  if (session.frontendConn) {
-    session.frontendConn.close();
-    session.frontendConn = undefined;
-  }
-
+function resetCallData() {
   session.streamSid = undefined;
   session.callSid = undefined;
   session.callerNumber = undefined;
   session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
-  session.latestMediaTimestamp = undefined;
-  session.saved_config = undefined;
-}
-
+  session.responseStartTimestamp =
+    undefined;
+  session.latestMediaTimestamp =
+    undefined;
+  session.transcript = undefined;
+  session.callStartedAt = undefined;
 }
 
 function cleanupConnection(ws?: WebSocket) {
   if (isOpen(ws)) {
     ws.close();
   }
+}
 
 function parseMessage(data: RawData): any {
   try {
@@ -798,6 +973,11 @@ function jsonSend(
   ws.send(JSON.stringify(obj));
 }
 
-function isOpen(ws?: WebSocket): ws is WebSocket {
-  return !!ws && ws.readyState === WebSocket.OPEN;
+function isOpen(
+  ws?: WebSocket
+): ws is WebSocket {
+  return (
+    !!ws &&
+    ws.readyState === WebSocket.OPEN
+  );
 }
