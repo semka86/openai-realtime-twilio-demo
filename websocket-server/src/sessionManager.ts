@@ -950,7 +950,7 @@ function resetCallData() {
 
 function cleanupConnection(ws?: WebSocket) {
   if (isOpen(ws)) {
-    ws.close();
+    ws.close(); 
   }
 }
 
