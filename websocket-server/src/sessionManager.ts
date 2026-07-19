@@ -129,7 +129,15 @@ function handleTwilioMessage(data: RawData) {
       session.callSid = msg.start?.callSid;
 
       const customParameters = msg.start?.customParameters || {};
-
+console.log("CALL DEBUG:", {
+  customParameters,
+  callerNumber:
+    customParameters.from ||
+    customParameters.From ||
+    customParameters.caller ||
+    customParameters.Caller ||
+    null,
+});
       session.callerNumber =
         customParameters.from ||
         customParameters.From ||
