@@ -785,7 +785,6 @@ function cleanupConnection(ws?: WebSocket) {
   if (isOpen(ws)) {
     ws.close();
   }
-}
 
 function parseMessage(data: RawData): any {
   try {
