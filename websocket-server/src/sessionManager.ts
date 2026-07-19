@@ -290,7 +290,11 @@ function tryConnectModel() {
 
 function handleModelMessage(data: RawData) {
   const event = parseMessage(data);
-  if (!event) 
+  if (!event) return;
+
+  // console.log("OpenAI Event:", JSON.stringify(event, null, 2));
+
+  jsonSend(session.frontendConn, event);
 // console.log("OpenAI Event:", JSON.stringify(event, null, 2));
 
   jsonSend(session.frontendConn, event);
