@@ -725,13 +725,6 @@ function handleTruncation() {
     });
   }
 
-  if (session.twilioConn && session.streamSid) {
-    jsonSend(session.twilioConn, {
-      event: "clear",
-      streamSid: session.streamSid,
-    });
-  }
-
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
 }
