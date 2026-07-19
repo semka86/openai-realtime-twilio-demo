@@ -739,6 +739,7 @@ const finishedSession: Session = {
   ...session,
   transcript: [...(session.transcript || [])],
 };
+};
 
   void finalizeCall(finishedSession).catch((error) => {
     console.error("Failed to finalize closed call:", error);
