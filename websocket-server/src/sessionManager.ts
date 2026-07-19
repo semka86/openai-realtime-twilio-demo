@@ -41,7 +41,10 @@ export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
   });
 
   ws.on("close", () => {
-    const finishedSession = session;
+    const finishedSession: Session = {
+  ...session,
+  transcript: [...(session.transcript || [])],
+};
 
     void finalizeCall(finishedSession).catch((error) => {
       console.error("Failed to finalize call:", error);
@@ -730,7 +733,10 @@ function closeModel() {
 }
 
 function closeAllConnections() {
-  const finishedSession = session;
+const finishedSession: Session = {
+  ...session,
+  transcript: [...(session.transcript || [])],
+};
 
   void finalizeCall(finishedSession).catch((error) => {
     console.error("Failed to finalize closed call:", error);
