@@ -268,9 +268,22 @@ function tryConnectModel() {
               type: "audio/pcmu",
             },
 
-            transcription: {
-              model: "gpt-4o-mini-transcribe",
-              language: "he",
+            noise_reduction: {
+  type: "near_field",
+},
+
+transcription: {
+  model: "gpt-4o-transcribe",
+  language: "he",
+  prompt: `השיחה היא בעברית ישראלית.
+
+תמלל במדויק שמות של אנשים, ערים, רחובות, מספרי בתים ושמות חברות.
+מונחים נפוצים בשיחה:
+לומינור, ניהול ואחזקת מבנים, ועד בית, מצלמות אבטחה, אינטרקום,
+תקלה, הצעת מחיר, בניין, כניסה, דירה, אשקלון, שדרות, קריית גת.
+
+אל תשנה שמות וכתובות ואל תנחש מילים שלא נשמעו בבירור.`,
+},
             },
 
             turn_detection: {
