@@ -746,11 +746,10 @@ function closeModel() {
 }
 
 function closeAllConnections() {
-const finishedSession: Session = {
-  ...session,
-  transcript: [...(session.transcript || [])],
-};
-};
+  const finishedSession: Session = {
+    ...session,
+    transcript: [...(session.transcript || [])],
+  };
 
   void finalizeCall(finishedSession).catch((error) => {
     console.error("Failed to finalize closed call:", error);
@@ -778,6 +777,8 @@ const finishedSession: Session = {
   session.responseStartTimestamp = undefined;
   session.latestMediaTimestamp = undefined;
   session.saved_config = undefined;
+}
+
 }
 
 function cleanupConnection(ws?: WebSocket) {
