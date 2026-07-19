@@ -305,9 +305,8 @@ transcription: {
       },
     });
   });
-
-  session.modelConn.on(
-    "message",
+      
+      
     handleModelMessage
   );
 
