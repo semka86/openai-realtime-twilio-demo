@@ -241,7 +241,7 @@ function tryConnectModel() {
         model: "gpt-realtime",
         output_modalities: ["audio"],
 
-        instructions: instructions: `
+     instructions: `
 אתה נציג טלפוני של חברת לומינור – ניהול ואחזקת מבנים.
 
 ענה בעברית בלבד.
