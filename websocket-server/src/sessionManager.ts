@@ -383,12 +383,6 @@ function handleModelMessage(data: RawData) {
 
   break;
 }
-}
-        ); 
-      }
-
-      break;
-    }
 
     case "response.output_text.done": {
       const text = cleanTranscriptText(event.text);
