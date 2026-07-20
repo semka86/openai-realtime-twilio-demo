@@ -364,19 +364,25 @@ function handleModelMessage(data: RawData) {
     }
 
     case "response.output_audio_transcript.done": {
-      const text = cleanTranscriptText(
-        event.transcript
-      );
+  const text = cleanTranscriptText(event.transcript);
 
-      if (text) {
-        addTranscriptEntry("assistant", text);
-        console.log(
-          "Assistant transcript:",
-          text if (
-  text &&
-  text.includes("נציג מטעמנו יחזור אליך בהקדם")
-) {
-  hangupCallAfterDelay(7000);
+  if (text) {
+    addTranscriptEntry("assistant", text);
+
+    console.log(
+      "Assistant transcript:",
+      text
+    );
+
+    if (
+      text.includes("נציג מטעמנו יחזור אליך בהקדם")
+    ) {
+      hangupCallAfterDelay(7000);
+    }
+  }
+
+  break;
+}
 }
         ); 
       }
