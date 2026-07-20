@@ -241,7 +241,7 @@ function tryConnectModel() {
         model: "gpt-realtime",
         output_modalities: ["audio"],
 
-        instructions: `,המטרה שלך היא לענות לשיחות עבור חברת “לומינור – ניהול ואחזקת מבנים”.
+        instructions: (המטרה שלך היא לענות לשיחות עבור חברת “לומינור – ניהול ואחזקת מבנים”.
 
 נהל שיחה קצרה, טבעית ואדיבה.
 
@@ -263,7 +263,7 @@ function tryConnectModel() {
 * סיים את השיחה בנימוס.
 
 אם המתקשר מוסיף מידע נוסף מיוזמתו, קבל אותו, אך אל תשאל עליו שאלות המשך.
-'.
+)
         audio: {
           input: {
             format: {
