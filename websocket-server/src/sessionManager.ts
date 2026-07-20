@@ -372,8 +372,13 @@ function handleModelMessage(data: RawData) {
         addTranscriptEntry("assistant", text);
         console.log(
           "Assistant transcript:",
-          text
-        );
+          text if (
+  text &&
+  text.includes("נציג מטעמנו יחזור אליך בהקדם")
+) {
+  hangupCallAfterDelay(7000);
+}
+        ); 
       }
 
       break;
