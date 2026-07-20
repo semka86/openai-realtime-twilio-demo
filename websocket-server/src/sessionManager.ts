@@ -943,7 +943,18 @@ function resetCallData() {
   session.transcript = undefined;
   session.callStartedAt = undefined;
 }
+function hangupCallAfterDelay(delayMs = 7000) {
+  if (!session.twilioConn) {
+    return;
+  }
 
+  setTimeout(() => {
+    if (isOpen(session.twilioConn)) {
+      console.log("Disconnecting call...");
+      session.twilioConn.close();
+    }
+  }, delayMs);
+}
 function cleanupConnection(ws?: WebSocket) {
   if (isOpen(ws)) {
     ws.close();
