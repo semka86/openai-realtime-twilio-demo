@@ -205,15 +205,15 @@ app.post("/whatsapp", async (req, res) => {
     }
 
     whatsappConversations.set(
-      from,
-      [
-        ...conversation,
-        {
-          role: "assistant",
-          content: reply,
-        },
-      ].slice(-20)
-    );
+  from,
+  [
+    ...conversation,
+    {
+      role: "assistant" as const,
+      content: reply,
+    },
+  ].slice(-20)
+);
 
     res.type("text/xml").send(
       `<?xml version="1.0" encoding="UTF-8"?>
