@@ -90,7 +90,150 @@ app.all("/twiml", (req, res) => {
     );
   }
 });
+// זיכרון זמני לשיחות WhatsApp.
+// בשלב ראשון נשמר בזיכרון השרת בלבד.
+const whatsappConversations = new Map<
+  string,
+  Array<{ role: "user" | "assistant"; content: string }>
+>();
 
+app.post("/whatsapp", async (req, res) => {
+  const from = typeof req.body?.From === "string" ? req.body.From : "";
+  const message = typeof req.body?.Body === "string"
+    ? req.body.Body.trim()
+    : "";
+
+  console.log("Incoming WhatsApp message:", {
+    from,
+    message,
+  });
+
+  if (!from || !message) {
+    res.type("text/xml").send(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>`
+    );
+    return;
+  }
+
+  try {
+    const previousMessages = whatsappConversations.get(from) || [];
+
+    // שומרים רק את 20 ההודעות האחרונות כדי שהשיחה לא תהיה כבדה מדי.
+    const conversation = [
+      ...previousMessages,
+      {
+        role: "user" as const,
+        content: message,
+      },
+    ].slice(-20);
+
+    const instructions = `
+אתה עונה ללקוחות בוואטסאפ בשם העסק לומינור ובסגנון הכתיבה של סיימון, בעל העסק.
+
+תחומי הפעילות:
+מצלמות אבטחה, אינטרקום, בקרת כניסה, אזעקות, תקשורת,
+ניהול ואחזקת מבנים.
+
+כללי שיחה:
+- ענה בצורה טבעית, קצרה, מקצועית ונעימה.
+- אל תשתמש בתפריטים ממוספרים אלא אם הם באמת נחוצים.
+- שאל בכל הודעה לכל היותר שאלה אחת או שתיים.
+- ענה באותה שפה שבה הלקוח כתב: עברית, רוסית או אנגלית.
+- אל תמציא מחירים, זמני הגעה, מלאי או התחייבויות.
+- אל תאשר עבודה או תור בלי אישור מפורש מסיימון.
+- כאשר חסר מידע, בקש אותו באופן טבעי.
+- עבור הצעת מחיר, נסה להבין מה נדרש, באיזה סוג מקום, באיזו עיר,
+  כמה יחידות או מצלמות נדרשות והאם קיימת תשתית.
+- עבור תקלה, בקש תיאור קצר, דגם אם ידוע ותמונה או סרטון כשזה יעזור.
+- אם הלקוח מבקש לדבר עם סיימון, כתוב שהפנייה הועברה אליו והוא יחזור אליו.
+- אל תכתוב שאתה GPT ואל תשתמש בשפה רובוטית.
+- אל תטען שביצעת פעולה בעולם האמיתי אם לא ביצעת אותה.
+`;
+
+    const openAIResponse = await fetch(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-5-mini",
+          instructions,
+          input: conversation.map((item) => ({
+            role: item.role,
+            content: [
+              {
+                type:
+                  item.role === "assistant"
+                    ? "output_text"
+                    : "input_text",
+                text: item.content,
+              },
+            ],
+          })),
+          max_output_tokens: 350,
+        }),
+      }
+    );
+
+    if (!openAIResponse.ok) {
+      const errorText = await openAIResponse.text();
+
+      console.error("OpenAI WhatsApp error:", {
+        status: openAIResponse.status,
+        errorText,
+      });
+
+      throw new Error(`OpenAI returned ${openAIResponse.status}`);
+    }
+
+    const result: any = await openAIResponse.json();
+
+    const reply =
+      typeof result.output_text === "string"
+        ? result.output_text.trim()
+        : result.output
+            ?.flatMap((item: any) => item.content || [])
+            ?.find((item: any) => item.type === "output_text")
+            ?.text?.trim();
+
+    if (!reply) {
+      throw new Error("OpenAI returned an empty WhatsApp reply");
+    }
+
+    whatsappConversations.set(
+      from,
+      [
+        ...conversation,
+        {
+          role: "assistant",
+          content: reply,
+        },
+      ].slice(-20)
+    );
+
+    res.type("text/xml").send(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>${escapeXml(reply)}</Message>
+</Response>`
+    );
+  } catch (error) {
+    console.error("WhatsApp webhook failed:", error);
+
+    res.type("text/xml").send(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>${escapeXml(
+    "קיבלתי את ההודעה. כרגע יש תקלה זמנית במענה ואחזור אליך בהקדם."
+  )}</Message>
+</Response>`
+    );
+  }
+});
 // רשימת הכלים הזמינים
 app.get("/tools", (_req, res) => {
   res.json(functions.map((f) => f.schema));
